@@ -11,6 +11,7 @@ const {
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
+const qrcode = require('qrcode-terminal');
 const db = require('./lib/db');
 
 // ==== SUPER ADMINS ====
@@ -21,7 +22,7 @@ const SUPER_ADMINS = [
 ];
 
 db.init();
-console.log('✅ Base de datos inicializada en data/bot.db');
+console.log('✅ Base de datos inicializada en data/ (archivos JSON)');
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -31,13 +32,16 @@ async function startBot() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    printQRInTerminal: true,
   });
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      console.log('📱 Escanea este código QR desde WhatsApp (Dispositivos vinculados):');
+      qrcode.generate(qr, { small: true });
+    }
     if (connection === 'close') {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
