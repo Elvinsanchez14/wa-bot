@@ -8,7 +8,7 @@ Bot de moderación de grupos de WhatsApp usando Baileys, pensado para correr en 
 pkg update && pkg upgrade -y
 pkg install nodejs git python make clang -y
 
-git clone <URL-DE-TU-REPO> wa-bot
+git clone https://github.com/Elvinsanchez14/wa-bot.git
 cd wa-bot
 
 npm install
