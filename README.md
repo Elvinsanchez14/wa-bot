@@ -1,56 +1,240 @@
-# wa-bot
+// lib/comandos.js
+// Bloque 4: sistema de comandos de moderación.
+// Todos los comandos que modifican algo (warn, kick, promote, etc.) requieren
+// que quien los use sea admin real del grupo en WhatsApp, o super admin del bot.
 
-Bot de moderación de grupos de WhatsApp usando Baileys, pensado para correr en Termux.
+const db = require('./db');
+const utilidad = require('./utilidad');
+const { manejarComandoSticker } = require('./sticker');
 
-## Instalación en Termux
+/**
+ * Revisa si el mensaje es un comando (empieza con "!") y lo ejecuta si aplica.
+ * Devuelve true si el mensaje era un comando (para que index.js sepa que ya se manejó).
+ */
+async function manejarComando(sock, grupoId, sender, msg, texto, helpers) {
+  if (!texto.startsWith('!')) return false;
 
-```bash
-pkg update && pkg upgrade -y
-pkg install nodejs git python make clang -y
+  const [cmdRaw, ...args] = texto.slice(1).trim().split(/\s+/);
+  const cmd = cmdRaw.toLowerCase();
 
-git clone https://github.com/Elvinsanchez14/wa-bot.git
-cd wa-bot
+  const esSuper = helpers.esSuperAdmin(sender);
+  const esAdmin = esSuper || (await helpers.esAdminDelGrupo(sock, grupoId, sender));
 
-npm install
-```
+  const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  const objetivo = mentionedJid[0] || null;
 
-## Configuración
+  switch (cmd) {
+    case 'warn': {
+      if (!esAdmin) return true;
+      if (!objetivo) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !warn @usuario [motivo]' });
+        return true;
+      }
+      const motivo = args.slice(1).join(' ') || 'Sin motivo especificado';
+      db.agregarWarning(objetivo, grupoId, motivo, sender);
+      db.agregarLog(grupoId, 'warn_manual', objetivo, sender, motivo);
 
-Antes de correrlo, edita `index.js` y cambia el número en `SUPER_ADMINS` por el tuyo,
-en formato `codigopais+numero@s.whatsapp.net` (ej. `521XXXXXXXXXX@s.whatsapp.net`).
+      const total = db.contarWarnings(objetivo, grupoId);
+      const limite = parseInt(db.getConfig(grupoId, 'limite_warns'), 10);
+      const nombre = objetivo.split('@')[0];
 
-## Ejecutar
+      if (total >= limite) {
+        const mensajeKick = `🚫 @${nombre} llegó al límite de ${limite} advertencias. Serás expulsado.`;
+        await helpers.avisarYExpulsar(sock, grupoId, objetivo, mensajeKick);
+      } else {
+        await sock.sendMessage(grupoId, {
+          text: `⚠️ @${nombre} recibió una advertencia (${total}/${limite}).\nMotivo: ${motivo}`,
+          mentions: [objetivo],
+        });
+      }
+      return true;
+    }
 
-```bash
-node index.js
-```
+    case 'warns': {
+      const jidConsulta = objetivo || sender;
+      const total = db.contarWarnings(jidConsulta, grupoId);
+      const limite = db.getConfig(grupoId, 'limite_warns');
+      const nombre = jidConsulta.split('@')[0];
+      await sock.sendMessage(grupoId, {
+        text: `📋 @${nombre} tiene ${total}/${limite} advertencias.`,
+        mentions: [jidConsulta],
+      });
+      return true;
+    }
 
-Va a mostrar un código QR en la terminal. Escanéalo desde WhatsApp:
-**Ajustes → Dispositivos vinculados → Vincular un dispositivo**.
+    case 'unwarn': {
+      if (!esAdmin) return true;
+      if (!objetivo) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !unwarn @usuario' });
+        return true;
+      }
+      const quitado = db.quitarUltimoWarning(objetivo, grupoId);
+      const nombre = objetivo.split('@')[0];
+      if (quitado) {
+        db.agregarLog(grupoId, 'unwarn', objetivo, sender, 'Se quitó la última advertencia');
+        await sock.sendMessage(grupoId, {
+          text: `✅ Se quitó la última advertencia de @${nombre}.`,
+          mentions: [objetivo],
+        });
+      } else {
+        await sock.sendMessage(grupoId, { text: `@${nombre} no tiene advertencias.`, mentions: [objetivo] });
+      }
+      return true;
+    }
 
-## Mantenerlo corriendo en segundo plano
+    case 'logs': {
+      if (!esAdmin) return true;
+      const limite = parseInt(args[0], 10) || 10;
+      const logs = db.obtenerLogs(grupoId, Math.min(limite, 30));
+      if (!logs.length) {
+        await sock.sendMessage(grupoId, { text: 'No hay registros todavía.' });
+        return true;
+      }
+      const texto2 = logs
+        .map((l) => {
+          const fecha = new Date(l.fecha).toLocaleString('es-MX');
+          const afectado = l.jid_afectado ? l.jid_afectado.split('@')[0] : '-';
+          return `[${fecha}] ${l.accion} → @${afectado} (${l.detalle || 'sin detalle'})`;
+        })
+        .join('\n');
+      await sock.sendMessage(grupoId, { text: `📜 *Últimos registros:*\n\n${texto2}` });
+      return true;
+    }
 
-```bash
-pkg install tmux -y
-tmux new -s bot
-node index.js
-```
+    case 'kick': {
+      if (!esAdmin) return true;
+      if (!objetivo) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !kick @usuario' });
+        return true;
+      }
+      const mensaje = `🚫 Un admin decidió expulsar a @${objetivo.split('@')[0]}.`;
+      db.agregarLog(grupoId, 'kick_manual', objetivo, sender, 'Kick manual por admin');
+      await helpers.avisarYExpulsar(sock, grupoId, objetivo, mensaje);
+      return true;
+    }
 
-Para salir sin cerrar el proceso: `Ctrl+B`, luego `D`.
-Para volver a verlo: `tmux attach -t bot`.
+    case 'promote': {
+      if (!esAdmin) return true;
+      if (!objetivo) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !promote @usuario' });
+        return true;
+      }
+      try {
+        await sock.groupParticipantsUpdate(grupoId, [objetivo], 'promote');
+        db.agregarLog(grupoId, 'promote', objetivo, sender, 'Promovido a admin');
+        await sock.sendMessage(grupoId, {
+          text: `✅ @${objetivo.split('@')[0]} ahora es admin.`,
+          mentions: [objetivo],
+        });
+      } catch (e) {
+        await sock.sendMessage(grupoId, { text: '❌ No se pudo promover (¿el bot es admin?).' });
+      }
+      return true;
+    }
 
-## Estado del proyecto
+    case 'demote': {
+      if (!esAdmin) return true;
+      if (!objetivo) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !demote @usuario' });
+        return true;
+      }
+      try {
+        await sock.groupParticipantsUpdate(grupoId, [objetivo], 'demote');
+        db.agregarLog(grupoId, 'demote', objetivo, sender, 'Removido como admin');
+        await sock.sendMessage(grupoId, {
+          text: `✅ @${objetivo.split('@')[0]} ya no es admin.`,
+          mentions: [objetivo],
+        });
+      } catch (e) {
+        await sock.sendMessage(grupoId, { text: '❌ No se pudo remover el rol (¿el bot es admin?).' });
+      }
+      return true;
+    }
 
-- [x] Bloque 1: conexión a WhatsApp + base de datos SQLite
-- [ ] Bloque 2: registro de usuarios + bienvenida + auto-kick por inactividad
-- [ ] Bloque 3: antilink por repetición + antispam/flood + antimención masiva
-- [ ] Bloque 4: warnings + logs + roles de WhatsApp
-- [ ] Bloque 5: utilidad (info, top, purga, stickers, modo silencio)
-- [ ] Bloque 6: bot conversacional con banco de frases
+    case 'reglas': {
+      const reglas = db.getConfig(grupoId, 'reglas_texto');
+      await sock.sendMessage(grupoId, { text: `📋 *Reglas del grupo:*\n\n${reglas}` });
+      return true;
+    }
 
-## Importante
+    case 'config': {
+      // !config clave valor  -- solo admins, para ajustar límites sin tocar código
+      if (!esAdmin) return true;
+      const [clave, ...valorArr] = args;
+      if (!clave) {
+        const claves = Object.keys(db.DEFAULTS)
+          .map((k) => `• ${k} = ${db.getConfig(grupoId, k)}`)
+          .join('\n');
+        await sock.sendMessage(grupoId, { text: `⚙️ *Configuración actual:*\n\n${claves}` });
+        return true;
+      }
+      const valor = valorArr.join(' ');
+      if (!valor) {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !config clave valor' });
+        return true;
+      }
+      db.setConfig(grupoId, clave, valor);
+      db.agregarLog(grupoId, 'config_cambiada', null, sender, `${clave} = ${valor}`);
+      await sock.sendMessage(grupoId, { text: `✅ Configuración actualizada: ${clave} = ${valor}` });
+      return true;
+    }
 
-- Usa un número de WhatsApp secundario, no tu principal — bots no oficiales van
-  contra los Términos de Servicio de WhatsApp y existe riesgo real de baneo.
-- Las carpetas `auth_info/` (tu sesión) y `data/` (tu base de datos) nunca se suben
-  al repo (ver `.gitignore`) — son locales y sensibles a cada instalación.
+    case 'info': {
+      await utilidad.comandoInfo(sock, grupoId, sender, objetivo);
+      return true;
+    }
+
+    case 'top': {
+      await utilidad.comandoTop(sock, grupoId);
+      return true;
+    }
+
+    case 'purga': {
+      if (!esAdmin) return true;
+      if (args[0] !== 'inactivos') {
+        await sock.sendMessage(grupoId, { text: '⚠️ Uso: !purga inactivos' });
+        return true;
+      }
+      await utilidad.comandoPurga(sock, grupoId, sender, helpers.avisarYExpulsar);
+      return true;
+    }
+
+    case 'silencio': {
+      if (!esAdmin) return true;
+      await utilidad.comandoSilencio(sock, grupoId, sender, args[0]);
+      return true;
+    }
+
+    case 'sticker': {
+      await manejarComandoSticker(sock, grupoId, sender, msg);
+      return true;
+    }
+
+    case 'menu': {
+      await sock.sendMessage(grupoId, {
+        text:
+          '*Comandos disponibles*\n\n' +
+          '!warn @usuario [motivo] - Advertir (admin)\n' +
+          '!warns [@usuario] - Ver advertencias\n' +
+          '!unwarn @usuario - Quitar última advertencia (admin)\n' +
+          '!kick @usuario - Expulsar (admin)\n' +
+          '!promote @usuario - Hacer admin (admin)\n' +
+          '!demote @usuario - Quitar admin (admin)\n' +
+          '!logs [cantidad] - Ver registros (admin)\n' +
+          '!config [clave valor] - Ver/ajustar configuración (admin)\n' +
+          '!reglas - Ver las reglas del grupo\n' +
+          '!info [@usuario] - Información del usuario\n' +
+          '!top - Ranking de participación\n' +
+          '!purga inactivos - Expulsar inactivos viejos (admin)\n' +
+          '!silencio on/off - Solo admins hablan (admin)\n' +
+          '!sticker - Convierte una imagen citada en sticker\n',
+      });
+      return true;
+    }
+
+    default:
+      return false; // no era un comando reconocido, dejamos que otros módulos lo revisen (ej. conversación)
+  }
+}
+
+module.exports = { manejarComando };
