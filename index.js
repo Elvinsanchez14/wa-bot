@@ -29,6 +29,17 @@ const SUPER_ADMINS = [
 db.init();
 console.log('✅ Base de datos inicializada en data/ (archivos JSON)');
 
+// ==== RED DE SEGURIDAD GLOBAL ====
+// Si algún error de red (timeout, conexión cerrada, etc.) se nos escapa sin
+// un try/catch en alguna parte del código, esto evita que tumbe TODO el bot.
+// En vez de eso, solo lo registramos y el bot sigue corriendo.
+process.on('unhandledRejection', (reason) => {
+  console.log('⚠️ Error no capturado (promesa rechazada), el bot sigue corriendo:', reason?.message || reason);
+});
+process.on('uncaughtException', (error) => {
+  console.log('⚠️ Error no capturado (excepción), el bot sigue corriendo:', error?.message || error);
+});
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const { version } = await fetchLatestBaileysVersion();
