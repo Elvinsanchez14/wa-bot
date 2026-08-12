@@ -18,6 +18,6 @@
     "@whiskeysockets/baileys": "^6.7.9",
     "pino": "^9.4.0",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.33.5"
+    "wa-sticker-formatter": "^4.4.4"
   }
 }
