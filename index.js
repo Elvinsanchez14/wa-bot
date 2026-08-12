@@ -13,6 +13,11 @@ const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const db = require('./lib/db');
+const bienvenida = require('./lib/bienvenida');
+const { iniciarRevisorInactividad } = require('./lib/inactividad');
+const antispam = require('./lib/antispam');
+const { manejarComando } = require('./lib/comandos');
+const utilidad = require('./lib/utilidad');
 
 // ==== SUPER ADMINS ====
 // Estos números tienen control total sobre TODOS los grupos donde esté el bot,
@@ -90,16 +95,50 @@ async function startBot() {
   // Exponer helpers y sock para que los siguientes bloques los usen
   sock._helpers = { esSuperAdmin, esAdminDelGrupo, avisarYExpulsar };
 
-  // ==== Placeholder de eventos: aquí se conectan los bloques 2, 3, 4... ====
+  // ==== Bloque 2: bienvenida + registro de usuarios ====
   sock.ev.on('group-participants.update', async (update) => {
-    // Bloque 2 va a manejar esto: registrar entrada + bienvenida
+    await bienvenida.manejarCambioParticipantes(sock, update);
   });
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
-    // Bloque 2, 3, 4... van a manejar esto: comandos, antilink, flood, conversación
+
+    const remoteJid = msg.key.remoteJid;
+    const isGroup = remoteJid.endsWith('@g.us');
+    if (!isGroup) return;
+
+    const sender = msg.key.participant || msg.key.remoteJid;
+    bienvenida.registrarActividad(sender, remoteJid);
+    utilidad.registrarMensajeParaTop(remoteJid, sender);
+
+    // No aplicamos ninguna sanción a super admins, para no auto-bloquearte por error
+    if (sock._helpers.esSuperAdmin(sender)) return;
+
+    const texto =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      '';
+
+    // ==== Bloque 4: comandos (!warn, !kick, !logs, etc.) ====
+    const fueComando = await manejarComando(sock, remoteJid, sender, msg, texto, sock._helpers);
+    if (fueComando) return; // un comando no debe pasar también por antilink/flood
+
+    // ==== Bloque 3: antilink, flood, antimención ====
+    // Si el antilink expulsó al usuario, no seguimos revisando flood/mención sobre un mensaje ya borrado.
+    const fueExpulsado = await antispam.revisarAntilink(
+      sock, remoteJid, sender, msg, texto, avisarYExpulsar
+    );
+    if (fueExpulsado) return;
+
+    await antispam.revisarFlood(sock, remoteJid, sender, msg);
+    await antispam.revisarAntimencion(sock, remoteJid, sender, msg);
+
+    // Bloque 5, 6... van a manejar aquí: utilidad (info, top, purga, sticker), conversación
   });
+
+  // Arranca el revisor periódico de inactividad (Bloque 2, parte 2)
+  iniciarRevisorInactividad(sock, avisarYExpulsar);
 
   return sock;
 }
