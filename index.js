@@ -3,6 +3,9 @@
 // Los bloques siguientes (moderación, comandos, conversación) se conectan
 // escuchando los mismos eventos que ya están preparados aquí abajo.
 
+const { cargarEnv } = require('./lib/cargarEnv');
+cargarEnv(); // debe ir antes de cualquier módulo que use process.env (ej. kaiIA.js con GROQ_API_KEY)
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
