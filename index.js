@@ -16,8 +16,12 @@ const db = require('./lib/db');
 const bienvenida = require('./lib/bienvenida');
 const { iniciarRevisorInactividad } = require('./lib/inactividad');
 const antispam = require('./lib/antispam');
+const { revisarNumeroSpam } = require('./lib/antispamNumeros');
 const { manejarComando } = require('./lib/comandos');
 const utilidad = require('./lib/utilidad');
+const { logMensaje } = require('./lib/logMensajes');
+const { registrarReconexion } = require('./lib/monitoreo');
+const { manejarKai } = require('./lib/kai');
 
 // ==== SUPER ADMINS ====
 // Estos números tienen control total sobre TODOS los grupos donde esté el bot,
@@ -62,8 +66,12 @@ async function startBot() {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log(`⚠️ Conexión cerrada (code ${statusCode}). Reconectando: ${shouldReconnect}`);
-      if (shouldReconnect) startBot();
-      else console.log('❌ Sesión cerrada. Borra la carpeta auth_info y vuelve a escanear el QR.');
+      if (shouldReconnect) {
+        registrarReconexion(sock, SUPER_ADMINS, `código ${statusCode}`);
+        startBot();
+      } else {
+        console.log('❌ Sesión cerrada. Borra la carpeta auth_info y vuelve a escanear el QR.');
+      }
     } else if (connection === 'open') {
       console.log('✅ Bot conectado a WhatsApp');
     }
@@ -120,11 +128,10 @@ async function startBot() {
     if (!isGroup) return;
 
     const sender = msg.key.participant || msg.key.remoteJid;
+    logMensaje(sender, remoteJid, msg);
+
     bienvenida.registrarActividad(sender, remoteJid);
     utilidad.registrarMensajeParaTop(remoteJid, sender);
-
-    // No aplicamos ninguna sanción a super admins, para no auto-bloquearte por error
-    if (sock._helpers.esSuperAdmin(sender)) return;
 
     const texto =
       msg.message.conversation ||
@@ -132,20 +139,29 @@ async function startBot() {
       '';
 
     // ==== Bloque 4: comandos (!warn, !kick, !logs, etc.) ====
+    // Los comandos SÍ deben funcionar para super admins — antes había un bug
+    // que cortaba el flujo completo para ti mismo antes de llegar aquí.
     const fueComando = await manejarComando(sock, remoteJid, sender, msg, texto, sock._helpers);
-    if (fueComando) return; // un comando no debe pasar también por antilink/flood
+    if (fueComando) return;
 
-    // ==== Bloque 3: antilink, flood, antimención ====
-    // Si el antilink expulsó al usuario, no seguimos revisando flood/mención sobre un mensaje ya borrado.
-    const fueExpulsado = await antispam.revisarAntilink(
-      sock, remoteJid, sender, msg, texto, avisarYExpulsar
-    );
-    if (fueExpulsado) return;
+    // A partir de aquí sí excluimos a super admins: nunca se les debe aplicar
+    // una sanción automática (antilink, flood, número spam) por error.
+    const esSuper = sock._helpers.esSuperAdmin(sender);
 
-    await antispam.revisarFlood(sock, remoteJid, sender, msg);
-    await antispam.revisarAntimencion(sock, remoteJid, sender, msg);
+    if (!esSuper) {
+      // ==== Bloque 3: antilink, flood, antimención ====
+      const fueExpulsado = await antispam.revisarAntilink(
+        sock, remoteJid, sender, msg, texto, avisarYExpulsar
+      );
+      if (fueExpulsado) return;
 
-    // Bloque 5, 6... van a manejar aquí: utilidad (info, top, purga, sticker), conversación
+      await antispam.revisarFlood(sock, remoteJid, sender, msg);
+      await antispam.revisarAntimencion(sock, remoteJid, sender, msg);
+      await revisarNumeroSpam(sock, remoteJid, sender, msg, texto);
+    }
+
+    // ==== Bloque 6: Kai, el bot conversacional ====
+    await manejarKai(sock, remoteJid, sender, msg, texto);
   });
 
   // Arranca el revisor periódico de inactividad (Bloque 2, parte 2)
@@ -155,3 +171,4 @@ async function startBot() {
 }
 
 startBot();
+ 
