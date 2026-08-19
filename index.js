@@ -25,6 +25,7 @@ const utilidad = require('./lib/utilidad');
 const { logMensaje } = require('./lib/logMensajes');
 const { registrarReconexion } = require('./lib/monitoreo');
 const { manejarKai } = require('./lib/kai');
+const { registrarMensajeParaClear } = require('./lib/limpiar');
 
 // ==== SUPER ADMINS ====
 // Estos números tienen control total sobre TODOS los grupos donde esté el bot,
@@ -135,6 +136,7 @@ async function startBot() {
 
     bienvenida.registrarActividad(sender, remoteJid);
     utilidad.registrarMensajeParaTop(remoteJid, sender);
+    registrarMensajeParaClear(remoteJid, msg);
 
     const texto =
       msg.message.conversation ||
@@ -174,4 +176,3 @@ async function startBot() {
 }
 
 startBot();
- 
