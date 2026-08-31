@@ -37,6 +37,7 @@ const SUPER_ADMINS = [
 ];
 
 db.init();
+minarDb.init();
 console.log('✅ Base de datos inicializada en data/ (archivos JSON)');
 
 // ==== RED DE SEGURIDAD GLOBAL ====
@@ -173,7 +174,18 @@ async function startBot() {
 
   // Arranca el revisor periódico de inactividad (Bloque 2, parte 2)
   iniciarRevisorInactividad(sock, avisarYExpulsar);
-
+  
+  //minar beta
+setInterval(async () => {
+  try {
+    const grupos = await sock.groupFetchAllParticipating();
+    for (const grupoId of Object.keys(grupos)) {
+      await minar.revisarMejorasCompletas(sock, grupoId);
+    }
+  } catch (e) {
+    // Silencioso, igual que el revisor de inactividad
+  }
+}, 60 * 1000); // revisa cada 1 minuto
   return sock;
 }
 
