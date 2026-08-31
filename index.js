@@ -26,6 +26,8 @@ const { logMensaje } = require('./lib/logMensajes');
 const { registrarReconexion } = require('./lib/monitoreo');
 const { manejarKai } = require('./lib/kai');
 const { registrarMensajeParaClear } = require('./lib/limpiar');
+const minarDb = require('./lib/minarDb');
+const minar = require('./lib/minar');
 
 // ==== SUPER ADMINS ====
 // Estos números tienen control total sobre TODOS los grupos donde esté el bot,
