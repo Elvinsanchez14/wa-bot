@@ -26,6 +26,7 @@ const { logMensaje } = require('./lib/logMensajes');
 const { registrarReconexion } = require('./lib/monitoreo');
 const { manejarKai } = require('./lib/kai');
 const { registrarMensajeParaClear } = require('./lib/limpiar');
+const { manejarPromocion } = require('./lib/protegerAdmins');
 const minarDb = require('./lib/minarDb');
 const minar = require('./lib/minar');
 
@@ -36,9 +37,19 @@ const SUPER_ADMINS = [
   '521XXXXXXXXXX@s.whatsapp.net', // <-- cambia esto por tu número real
 ];
 
+// ==== ID del grupo principal, para avisos del sistema de minería ====
+// Se lee desde .env (variable GRUPO_PRINCIPAL_ID), NUNCA hardcodeado aquí --
+// así el código es seguro para subir a GitHub sin exponer datos de tu instalación.
+// Formato esperado en .env: GRUPO_PRINCIPAL_ID=120363xxxxxxxxxxxx@g.us
+const GRUPO_PRINCIPAL_ID = process.env.GRUPO_PRINCIPAL_ID;
+
 db.init();
 minarDb.init();
 console.log('✅ Base de datos inicializada en data/ (archivos JSON)');
+
+if (!GRUPO_PRINCIPAL_ID) {
+  console.log('⚠️ GRUPO_PRINCIPAL_ID no está configurado en .env — los avisos de mejoras de minería no se enviarán hasta que lo configures.');
+}
 
 // ==== RED DE SEGURIDAD GLOBAL ====
 // Si algún error de red (timeout, conexión cerrada, etc.) se nos escapa sin
@@ -122,8 +133,13 @@ async function startBot() {
   sock._helpers = { esSuperAdmin, esAdminDelGrupo, avisarYExpulsar };
 
   // ==== Bloque 2: bienvenida + registro de usuarios ====
+  // También revisa promociones a admin (protección de admins no autorizados).
   sock.ev.on('group-participants.update', async (update) => {
     await bienvenida.manejarCambioParticipantes(sock, update);
+
+    if (update.action === 'promote') {
+      await manejarPromocion(sock, update.id, update.participants);
+    }
   });
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -146,7 +162,7 @@ async function startBot() {
       msg.message.extendedTextMessage?.text ||
       '';
 
-    // ==== Bloque 4: comandos (!warn, !kick, !logs, etc.) ====
+    // ==== Bloque 4: comandos (!warn, !kick, !logs, !minar, etc.) ====
     // Los comandos SÍ deben funcionar para super admins — antes había un bug
     // que cortaba el flujo completo para ti mismo antes de llegar aquí.
     const fueComando = await manejarComando(sock, remoteJid, sender, msg, texto, sock._helpers);
@@ -174,15 +190,20 @@ async function startBot() {
 
   // Arranca el revisor periódico de inactividad (Bloque 2, parte 2)
   iniciarRevisorInactividad(sock, avisarYExpulsar);
-  
-  //minar beta
-setInterval(async () => {
-  try {
-    // Usa el ID de tu grupo principal aquí, para que ahí lleguen los avisos de mejora completada
-    await minar.revisarMejorasCompletas(sock, 'TU_GRUPO_PRINCIPAL@g.us');
-  } catch (e) {
-    // Silencioso
-  }
-}, 60 * 1000);
+
+  // ==== Sistema de minería: revisor de mejoras completadas ====
+  // El progreso es global por jugador (no por grupo), así que este revisor
+  // corre una sola vez por ciclo y avisa en el grupo principal configurado en .env.
+  setInterval(async () => {
+    if (!GRUPO_PRINCIPAL_ID) return; // sin configurar, no hay dónde avisar
+    try {
+      await minar.revisarMejorasCompletas(sock, GRUPO_PRINCIPAL_ID);
+    } catch (e) {
+      console.log('Error en revisor de mejoras de minería:', e.message);
+    }
+  }, 60 * 1000);
+
+  return sock;
+}
 
 startBot();
