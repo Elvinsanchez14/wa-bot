@@ -178,15 +178,11 @@ async function startBot() {
   //minar beta
 setInterval(async () => {
   try {
-    const grupos = await sock.groupFetchAllParticipating();
-    for (const grupoId of Object.keys(grupos)) {
-      await minar.revisarMejorasCompletas(sock, grupoId);
-    }
+    // Usa el ID de tu grupo principal aquí, para que ahí lleguen los avisos de mejora completada
+    await minar.revisarMejorasCompletas(sock, 'TU_GRUPO_PRINCIPAL@g.us');
   } catch (e) {
-    // Silencioso, igual que el revisor de inactividad
+    // Silencioso
   }
-}, 60 * 1000); // revisa cada 1 minuto
-  return sock;
-}
+}, 60 * 1000);
 
 startBot();
